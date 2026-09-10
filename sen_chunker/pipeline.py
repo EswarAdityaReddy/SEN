@@ -52,6 +52,10 @@ def run_chunking_pipeline(
             doc_id = str(row.get('document_id', ''))
             doc_meta_map[doc_id] = row.to_dict()
 
+    archive_count = int((df_files['file_type'].astype(str).str.lower() == 'zip').sum())
+    extracted_records = df_files['relative_path'].astype(str).str.replace('\\', '/', regex=False).str.startswith('extracted/')
+    df_files = df_files[extracted_records]
+
     if target_year is not None:
         df_files = df_files[df_files['year'] == target_year]
 
@@ -60,7 +64,15 @@ def run_chunking_pipeline(
     start_time = time.time()
 
     all_chunks: List[RAGChunk] = []
-    file_type_counts: Dict[str, int] = {'pdf': 0, 'excel': 0, 'csv': 0, 'text': 0, 'docx': 0, 'skipped': 0}
+    file_type_counts: Dict[str, int] = {
+        'pdf': 0,
+        'excel': 0,
+        'csv': 0,
+        'text': 0,
+        'docx': 0,
+        'skipped': 0,
+        'archives_skipped': archive_count,
+    }
     chunk_counts_by_format: Dict[str, int] = {'pdf_page': 0, 'excel_sheet': 0, 'csv_dataset': 0, 'text_doc': 0}
     chunk_counts_by_year: Dict[int, int] = {}
     processed_files_count = 0
@@ -73,22 +85,18 @@ def run_chunking_pipeline(
         file_type = str(row.get('file_type', '')).lower()
         doc_id = str(row.get('document_id', ''))
 
-        # Resolve full local file path
-        full_path = os.path.join(data_dir, rel_path.replace("/", os.sep))
-        if not os.path.exists(full_path):
-            # Try raw/extracted fallback
-            full_path = os.path.join(data_dir, "raw", str(year), filename)
-            if not os.path.exists(full_path):
-                full_path = os.path.join(data_dir, "extracted", str(year), filename)
+        # Process only files in the extracted corpus.
+        extracted_rel_path = f"extracted/{year}/{filename}"
+        full_path = os.path.join(data_dir, extracted_rel_path.replace("/", os.sep))
 
         if not os.path.exists(full_path):
-            print(f"Warning: File not found on disk: {rel_path} ({full_path})")
+            print(f"Warning: File not found on disk: {extracted_rel_path} ({full_path})")
             file_type_counts['skipped'] += 1
             continue
 
         # Skip raw zip containers since their contents are already extracted
         if file_type == 'zip':
-            file_type_counts['skipped'] += 1
+            file_type_counts['archives_skipped'] += 1
             continue
 
         # Retrieve document level metadata if available
@@ -99,7 +107,7 @@ def run_chunking_pipeline(
             'academic_year': doc_info.get('academic_year') or (f"{year-1}-{str(year)[2:]}" if year > 2000 else str(year)),
             'document_id': doc_id,
             'filename': filename,
-            'relative_path': rel_path,
+            'relative_path': extracted_rel_path,
             'source_url': row.get('source_url') or doc_info.get('source_url'),
             'publication_url': row.get('download_url') or doc_info.get('publication_url'),
         }
